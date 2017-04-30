@@ -15,6 +15,20 @@
 #include "include/base64.h"
 #include <bitset>
 #include <thread>
+#include <vector>
+
+std::string mask_message(std::string message, char* mask){
+    std::string out = "";
+    for(int i = 0 ; i < message.size(); ++i)
+	out += char(message[i] ^ mask[i % 4]);
+    return out;
+}
+
+std::string generate_accept(std::string key){
+    key.append("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+    unsigned char const* hash = SHA1(reinterpret_cast<const unsigned char*>(key.c_str()), key.length(), nullptr);
+    return base64_encode(hash, 20);
+}
 
 int main(int argc, char *argv[])
 {
@@ -52,63 +66,83 @@ int main(int argc, char *argv[])
 	std::string reply;
 	
 	ws = strstr(buffer, "Upgrade: websocket");
-	if(ws){ // if websocket handshake. This works
-	    std::cout << "<websocket>" << std::endl;
+	
+	if(ws){ // if websocket handshake
 	    std::string key = buf.substr(buf.find("Sec-WebSocket-Key") + 19,
 				buf.substr(buf.find("Sec-WebSocket-Key")).find("\n") - 20);
-	    
-	    std::cout << "key = " << key << std::endl;
-	    key.append("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-	    std::cout << "key = " << key << " length = " << key.length() << std::endl;
-	    unsigned char const* hash = SHA1(reinterpret_cast<const unsigned char*>(key.c_str()), key.length(), nullptr);
-	    std::string b64 = base64_encode(hash, 20);
-	    std::cout << "b64 = " << b64 << std::endl;
-	    
+	    std::string key_accept = generate_accept(key);
+
 	    reply =
 		"HTTP/1.1 101 Switching Protocols\r\n"
 		"Upgrade: websocket\r\n"
 		"Connection: Upgrade\r\n"
-		"Sec-WebSocket-Accept: " + b64 + "\r\n\r\n";
-	}else{
-	    std::cout << "<other>" << std::endl;
+		"Sec-WebSocket-Accept: " + key_accept + "\r\n\r\n";
+	    
+	}else{ // non-handshake, interpreted as "normal" request
 	    reply =
 		"HTTP/1.1 200 OK\r\n"
 		"\n<script>var ws = new WebSocket('ws://192.168.10.117:8080');\n"
 		"ws.addEventListener('open',function(event){"
 		"\n\tconsole.log('open!!');\n\tws.send('yo bro!');\n});\n"
-		"var sendmessage = function(){console.log('click');ws.send('test123567890');};"
+		"var sendmessage = function(){console.log('click');ws.send('test123567890"
+		"A1234567890B1234567890C1234567890D1234567890E1234567890F1234567890"
+		"F1234567890G1234567890H1234567890I1234567890J1234567890K1234567890"
+		"L1234567890M1234567890N1234567890O1234567890P1234567890Q1234567890');};"
 		"ws.onmessage = function(event){console.log(event.data);};</script>"
 		"<input type=\"text\"><button onclick=\"sendmessage()\">send</button>\r\n";
+	    // hardcoded websocket testing interface
 	}
 	send(connfd, reply.c_str(), reply.size(), 0);
+	
 	std::cout << "sent " << (ws ? " socket accept" : "webpage") << " to " << connfd << " (" << address<<")" << std::endl;
+
 	if(ws){
 	    std::cout << "starting new thread for " << connfd << " (" << address << ")"<< std::endl;
 	    std::thread thr([&connfd]() {
 		    int cpfd = connfd;
+		    std::vector<char*> segments;
 		    while(true){
 			char wsbuff[1400];
-			int abc = read(cpfd, wsbuff, 1400);
-			if(abc > 0){
-			    std::cout << "received " << abc << " bytes:" << std::endl;
-			    char mask[4] = {wsbuff[2], wsbuff[3], wsbuff[4], wsbuff[5]};
-			    for(int i = 6; i < abc; ++i)
-				std::cout << char(wsbuff[i] ^ mask[(i - 2) % 4]);
-			    std::cout << std::endl;
-			    char* response = (char*)malloc(sizeof(char) * (abc - 4));
-			    response[0] = 0x81;
-			    response[1] = char(abc - 6);
-			    for(int i = 6; i < abc; ++i)
-				response[i - 4] = wsbuff[i] ^ mask[(i - 2) % 4];
-			    send(cpfd, response, abc - 4, 0);
+			int fsize = read(cpfd, wsbuff, 1400);
+			if(fsize > 0){
+			    uint64_t size = char(wsbuff[1] ^ 0x80);
+			    int offset = 6; // payload start;
+			    if(size == 126){ // size class 2 ( < 65536) (buffer is too small)
+				size = (((unsigned int)wsbuff[2] << 8) | (unsigned char)wsbuff[3]);
+				offset = 8;
+			    }else if(size == 127){ // size class 3 (huge)
+			    	size = 0;
+				for(int i = 0; i < 8; ++i)
+				    size |= (uint64_t(wsbuff[2 + i]) << 8 * (7 - i));
+				offset = 14;
+			    }
+			    std::cout << "received " << fsize << " bytes, offset = " << offset << " size = " << size << std::endl;
+			    char mask[4] = {wsbuff[offset - 4], wsbuff[offset - 3],
+					    wsbuff[offset - 2], wsbuff[offset - 1]};
+			    std::string message = "";
+			    
+			    for(int i = 0; i < size; ++i)
+				message.push_back(char(wsbuff[offset + i] ^ mask[i % 4]));
+			    std::cout << "message from client: " << message << std::endl;
+
+			    // send back all but the mask (4 bytes)
+			    char* response = (char*)malloc(sizeof(char) * (fsize - 4));
+			    
+			    for(int i = 0; i < offset - 4; ++i)
+				response[i] = wsbuff[i];
+			    for(int i = 0; i < size; ++i)
+				response[offset - 4 + i] = message[i];
+			    response[1] ^= 0x80;
+			    send(cpfd, response, fsize - 4, 0);
 			}
-			usleep(10);
+			usleep(1000);
 		    }
 		});
 	    thr.detach();
 	    ws = false;
 	}
 	//close(connfd);
-        usleep(10);
+        usleep(1000); // to save the CPU
      }
 }
+
