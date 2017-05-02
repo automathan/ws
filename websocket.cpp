@@ -1,25 +1,4 @@
 #include "websocket.h"
-/*#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-#include <sys/types.h>
-#include <time.h>
-#include <string>
-#include <iostream>
-#include <openssl/sha.h>
-#include "include/base64.h"
-#include <bitset>
-#include <thread>
-#include <mutex>
-#include <vector>
-*/
-
-
     
 std::string ws::websocket::generate_accept(std::string key){
     key.append("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
@@ -49,7 +28,7 @@ void ws::websocket::new_websocket(int connfd){
 			if(size == 126){
 			    size = (((unsigned int)wsbuff[2] << 8) | (unsigned char)wsbuff[3]);
 			    offset = 8;
-				}else if(size == 127){
+			}else if(size == 127){
 			    size = 0;
 			    for(int i = 0; i < 8; ++i)
 				size |= (uint64_t(wsbuff[2 + i]) << 8 * (7 - i));
@@ -57,20 +36,23 @@ void ws::websocket::new_websocket(int connfd){
 			}
 			
 			char mask[4] = {wsbuff[offset - 4], wsbuff[offset - 3],
-						wsbuff[offset - 2], wsbuff[offset - 1]};
+					wsbuff[offset - 2], wsbuff[offset - 1]};
 			char* msg_data = (char*)malloc(sizeof(char) * size);
 			memcpy(msg_data, wsbuff + offset, size);
 			std::string message = mask_message(std::string(msg_data), mask);
 			std::lock_guard<std::mutex> lock(messages_mx);
 			messages.push_back({fdcp, message});
-			char* response = (char*)malloc(sizeof(char) * (fsize - 4));
-				
-			memcpy(response, wsbuff, offset - 4);
-			memcpy(response + (offset - 4), message.c_str(), size);
-			response[1] ^= 0x80;
+
+                        /* ECHO
+			   char* response = (char*)malloc(sizeof(char) * (fsize - 4));
 			
-			send(fdcp, response, fsize - 4, 0);
-			free(response);
+			   memcpy(response, wsbuff, offset - 4);
+			   memcpy(response + (offset - 4), message.c_str(), size);
+			   response[1] ^= 0x80;
+			   
+			   send(fdcp, response, fsize - 4, 0);
+			   free(response);*/
+			
 			free(msg_data);
 		    }else if(opcode == 0x08){
 			send(fdcp, wsbuff, 1, 0);
@@ -94,8 +76,7 @@ void ws::websocket::new_websocket(int connfd){
 
 void ws::websocket::run(){
     bool ws = false;
-    while(1)
-    {
+    while(true){
 	connfd = accept(listenfd, (struct sockaddr*)NULL, NULL);
 	socklen_t ll = 14;
 	getpeername(connfd, &caddr, &ll);
@@ -106,7 +87,6 @@ void ws::websocket::run(){
 	read(connfd, buffer, 1400);
 	
 	std::string buf(buffer);
-	
 	
 	std::string reply;
 	
@@ -186,6 +166,7 @@ std::vector<ws::wsmsg> ws::websocket::get_msg_buffer(){
     std::lock_guard<std::mutex> lock(messages_mx);
     for(int i = 0; i < messages.size(); ++i)
 	cpy.push_back(messages[i]);
+    messages.clear();
     return cpy;
 }
 

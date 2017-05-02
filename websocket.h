@@ -17,7 +17,6 @@
 #include <mutex>
 #include <vector>
 
-
 namespace ws{
     struct wsmsg{
         int sock_id;
@@ -28,7 +27,7 @@ namespace ws{
     private:
         int listenfd;
         int connfd;
-        struct sockaddr_in serv_addr;
+	struct sockaddr_in serv_addr;
 	struct sockaddr caddr;
         std::string webpage;
         std::vector<int> clients;
@@ -43,10 +42,10 @@ namespace ws{
         void run();
     public:
         void start(int port, std::string wp);
-        int send_message(int id, std::string message);
+	int send_message(int id, std::string message);
 	int broadcast_message(std::string message);
         std::vector<wsmsg>  get_msg_buffer();
         std::vector<int> get_clients();
-    };   
+    };
 }
 
