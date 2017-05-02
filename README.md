@@ -9,7 +9,14 @@ Functionality:
 - Can list all live clients
 - Can give you a buffer of all messages revieved
 
-Check example.cpp for a very basic client using all the functionalities
+Check example.cpp for a very basic client using all the functionalities<br>
+How to compile the example:<br>
+g++ example.cpp websocket.cpp include/base64.cpp -lcrypto -pthread<br>
+
+
+Confirmed to run well on Manjaro Linux<br>
+For some reason it takes a while to connect a client to the server, but it works.<br>
+
 
 Sources of information:<br>
 https://developer.mozilla.org/en-US/docs/Web/API/WebSocket<br>
