@@ -27,7 +27,7 @@ int main(int argc, char *argv[])
     ws.start(8080, webpage);
     while(1){
         std::string input = "";
-        std::cout << "\n1: check message buffer\n2: send message\n3: list client ids" << std::endl;
+        std::cout << "\n1: check message buffer\n2: send message\n3: list client ids\n4: broadcast message to all clients" << std::endl;
         getline(std::cin, input);
         int option = stoi(input);
         if(option == 1){
@@ -56,5 +56,18 @@ int main(int argc, char *argv[])
             for(int i = 0; i < clients.size(); ++i)
                 std::cout << clients[i] << std::endl;
         }
+	if(option == 4){
+            std::cout << "\nmessage:" << std::endl;
+            getline(std::cin, input);
+
+            int retcode = ws.broadcast_message(input);
+            if(retcode == -1){
+                std::cout << "something went wrong" << std::endl;
+            }
+            if(retcode == 1){
+                std::cout << "message succesfully broadcasted" << std::endl;
+            }
+        
+	}
     };
 }

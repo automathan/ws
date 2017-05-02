@@ -44,6 +44,7 @@ namespace ws{
     public:
         void start(int port, std::string wp);
         int send_message(int id, std::string message);
+	int broadcast_message(std::string message);
         std::vector<wsmsg>  get_msg_buffer();
         std::vector<int> get_clients();
     };   
