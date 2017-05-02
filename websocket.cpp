@@ -1,4 +1,5 @@
-#include <sys/socket.h>
+#include "websocket.h"
+/*#include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdio.h>
@@ -8,7 +9,6 @@
 #include <string.h>
 #include <sys/types.h>
 #include <time.h>
-//cpp
 #include <string>
 #include <iostream>
 #include <openssl/sha.h>
@@ -17,198 +17,178 @@
 #include <thread>
 #include <mutex>
 #include <vector>
+*/
 
-std::string generate_accept(std::string key){
+
+    
+std::string ws::websocket::generate_accept(std::string key){
     key.append("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
     unsigned char const* hash = SHA1(reinterpret_cast<const unsigned char*>(key.c_str()), key.length(), nullptr);
     return base64_encode(hash, 20);
 }
 
-struct wsmsg{
-    int sock_id;
-    std::string message;
-};
+std::string ws::websocket::mask_message(std::string message, char* mask){
+    std::string out = "";
+    for(int i = 0 ; i < message.size(); ++i)
+	out += char(message[i] ^ mask[i % 4]);
+    return out;
+}
 
-class websocket {
-private:
-    int listenfd;
-    int connfd;
-    struct sockaddr_in serv_addr; 
-    struct sockaddr caddr;
-    std::string webpage;
-    std::vector<int> clients;
-    std::vector<wsmsg> messages;
-    std::mutex clients_mx;
-    std::mutex messages_mx;
-    
-
-    static std::string mask_message(std::string message, char* mask){
-	std::string out = "";
-	for(int i = 0 ; i < message.size(); ++i)
-	    out += char(message[i] ^ mask[i % 4]);
-	return out;
-    }
-    void new_websocket(int connfd){
-	std::thread thr([this](int fdcp) {
-		std::vector<char*> segments;
-		bool open = true;
-		while(open){
-		    char wsbuff[1400];
-		    int fsize = read(fdcp, wsbuff, 1400);
-		    if(fsize > 0){
-			int opcode = wsbuff[0] & 0x0f;
-			if(opcode == 0x01){
-			    uint64_t size = char(wsbuff[1] ^ 0x80);
-			    int offset = 6; // payload start;
-			    if(size == 126){ // size class 2 ( < 65536) (buffer is too small)
-				size = (((unsigned int)wsbuff[2] << 8) | (unsigned char)wsbuff[3]);
-				offset = 8;
-			    }else if(size == 127){ // size class 3 (huge)
-				size = 0;
-				for(int i = 0; i < 8; ++i)
-				    size |= (uint64_t(wsbuff[2 + i]) << 8 * (7 - i));
-				offset = 14;
-			    }
+void ws::websocket::new_websocket(int connfd){
+    std::thread thr([this](int fdcp) {
+	    std::vector<char*> segments;
+	    bool open = true;
+	    while(open){
+		char wsbuff[1400];
+		int fsize = read(fdcp, wsbuff, 1400);
+		if(fsize > 0){
+		    int opcode = wsbuff[0] & 0x0f;
+		    if(opcode == 0x01){
+			uint64_t size = char(wsbuff[1] ^ 0x80);
+			int offset = 6; 
+			if(size == 126){
+			    size = (((unsigned int)wsbuff[2] << 8) | (unsigned char)wsbuff[3]);
+			    offset = 8;
+				}else if(size == 127){
+			    size = 0;
+			    for(int i = 0; i < 8; ++i)
+				size |= (uint64_t(wsbuff[2 + i]) << 8 * (7 - i));
+			    offset = 14;
+			}
+			
+			char mask[4] = {wsbuff[offset - 4], wsbuff[offset - 3],
+						wsbuff[offset - 2], wsbuff[offset - 1]};
+			char* msg_data = (char*)malloc(sizeof(char) * size);
+			memcpy(msg_data, wsbuff + offset, size);
+			std::string message = mask_message(std::string(msg_data), mask);
+			std::lock_guard<std::mutex> lock(messages_mx);
+			messages.push_back({fdcp, message});
+			char* response = (char*)malloc(sizeof(char) * (fsize - 4));
 				
-			    //std::cout << fdcp << " received " << fsize << " bytes, offset = " << offset << " size = " << size << std::endl;
-			    char mask[4] = {wsbuff[offset - 4], wsbuff[offset - 3],
-					    wsbuff[offset - 2], wsbuff[offset - 1]};
-			    char* msg_data = (char*)malloc(sizeof(char) * size);
-			    memcpy(msg_data, wsbuff + offset, size);
-			    std::string message = mask_message(std::string(msg_data), mask);
-			    std::lock_guard<std::mutex> lock(messages_mx);
-			    messages.push_back({fdcp, message});
-			    //std::cout << "message from client: " << message << std::endl;
-				
-			    // send back all but the mask (4 bytes)
-			    char* response = (char*)malloc(sizeof(char) * (fsize - 4));
-				
-			    memcpy(response, wsbuff, offset - 4);
-			    memcpy(response + (offset - 4), message.c_str(), size);
-			    response[1] ^= 0x80;
-				
-			    send(fdcp, response, fsize - 4, 0);
-			    free(response);
-			    free(msg_data);
-			}else if(opcode == 0x08){
-			    send(fdcp, wsbuff, 1, 0);
-			    close(fdcp);
-			    open = false;
-			    int index = -1;
-			    for(int i = 0; i < clients.size(); ++i)
-				if(clients[i] == fdcp)
-				    index = i;
-			    if(index >= 0){
-				std::lock_guard<std::mutex> lock(clients_mx);
-				clients.erase(clients.begin() + index);
-			    }
+			memcpy(response, wsbuff, offset - 4);
+			memcpy(response + (offset - 4), message.c_str(), size);
+			response[1] ^= 0x80;
+			
+			send(fdcp, response, fsize - 4, 0);
+			free(response);
+				free(msg_data);
+		    }else if(opcode == 0x08){
+			send(fdcp, wsbuff, 1, 0);
+			close(fdcp);
+			open = false;
+			int index = -1;
+			for(int i = 0; i < clients.size(); ++i)
+			    if(clients[i] == fdcp)
+				index = i;
+			if(index >= 0){
+			    std::lock_guard<std::mutex> lock(clients_mx);
+			    clients.erase(clients.begin() + index);
 			}
 		    }
-		    usleep(1000);
 		}
-	    }, connfd);
-	thr.detach();
-    }
-    void run(){
-	bool ws = false;
-	while(1)
-	{
-	    connfd = accept(listenfd, (struct sockaddr*)NULL, NULL);
-	    socklen_t ll = 14;
-	    getpeername(connfd, &caddr, &ll);
-	    std::string address(caddr.sa_data);
-	    //std::cout << "connfd = " << connfd << std::endl;
-
-	    char buffer[1400];
-	
-	    read(connfd, buffer, 1400);
-
-	    std::string buf(buffer);
-	    
-	    //std::cout << buf << std::endl;
-	
-	    std::string reply;
-	
-	    ws = strstr(buffer, "Upgrade: websocket");
-	
-	    if(ws){ // if websocket handshake
-		std::string key = buf.substr(buf.find("Sec-WebSocket-Key") + 19,
-					     buf.substr(buf.find("Sec-WebSocket-Key")).find("\n") - 20);
-		std::string key_accept = generate_accept(key);
-
-		reply =
-		    "HTTP/1.1 101 Switching Protocols\r\n"
-		    "Upgrade: websocket\r\n"
-		    "Connection: Upgrade\r\n"
-		    "Sec-WebSocket-Accept: " + key_accept + "\r\n\r\n";
-		
-	    }else{ // non-handshake, interpreted as "normal" request
-		reply = webpage;
+		usleep(1000);
 	    }
-	    send(connfd, reply.c_str(), reply.size(), 0);
-	    
-	    //std::cout << "sent " << (ws ? " socket accept" : "webpage") << " to " << connfd << " (" << address<<")" << std::endl;
-	    
-	    if(ws){
-		//std::cout << "starting new thread for " << connfd << " (" << address << ")"<< std::endl;
-		new_websocket(connfd);
-		clients.push_back(connfd);
-		ws = false;
-	    }
-	    //close(connfd);
-	    usleep(1000); // to save the CPU
-	}
-    }
-public:
-    void init(int port, std::string wp){
-	webpage = wp;
-	listenfd = socket(AF_INET, SOCK_STREAM, 0);
-	memset(&serv_addr, '0', sizeof(serv_addr));
-    
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	serv_addr.sin_port = htons(port); 
+	}, connfd);
+    thr.detach();
+}
 
-	bind(listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
-	listen(listenfd, port);
-	std::thread thr(&websocket::run, this);
-	thr.detach();
-    }
-    int send_message(int id, std::string message){
-	bool open = false;
-	for(int i = 0; i < clients.size(); ++i){
-	    if(clients[i] == id)
-		open = true;
-	}
-	if(open){
-	    int length = message.size();
-	    char* frame = (char*)malloc(sizeof(char)*(length + 2));
-	    frame[0] = 0x81;
-	    frame[1] = length ^ (length & 0x80 ? 0x80 : 0x00);
-	    memcpy(frame + 2, message.c_str(), length);
-	    send(id, frame, length + 2, 0);
-	    return 1;
+void ws::websocket::run(){
+    bool ws = false;
+    while(1)
+    {
+	connfd = accept(listenfd, (struct sockaddr*)NULL, NULL);
+	socklen_t ll = 14;
+	getpeername(connfd, &caddr, &ll);
+	std::string address(caddr.sa_data);
+	
+	char buffer[1400];
+	
+	read(connfd, buffer, 1400);
+	
+	std::string buf(buffer);
+	
+	
+	std::string reply;
+	
+	ws = strstr(buffer, "Upgrade: websocket");
+	
+	if(ws){
+	    std::string key = buf.substr(buf.find("Sec-WebSocket-Key") + 19,
+					 buf.substr(buf.find("Sec-WebSocket-Key")).find("\n") - 20);
+	    std::string key_accept = generate_accept(key);
+	    
+	    reply =
+		"HTTP/1.1 101 Switching Protocols\r\n"
+		"Upgrade: websocket\r\n"
+		"Connection: Upgrade\r\n"
+		"Sec-WebSocket-Accept: " + key_accept + "\r\n\r\n";
+	    
 	}else{
-	    return -1;
+	    reply = webpage;
 	}
+	send(connfd, reply.c_str(), reply.size(), 0);
+	
+	
+	if(ws){
+	    new_websocket(connfd);
+	    clients.push_back(connfd);
+	    ws = false;
+	}
+	usleep(1000);
     }
-    std::string get_msg_buffer(){
-	std::lock_guard<std::mutex> lock(messages_mx);
-	std::string out = "";
-	for(int i = 0; i < messages.size(); ++i)
-	    out += "client" + std::to_string(messages[i].sock_id) + ": " + messages[i].message + "\n";
-	messages.clear();
-	return out;
-    }
-    std::vector<int> get_clients(){
-	std::vector<int> cpy;
-	std::lock_guard<std::mutex> lock(clients_mx);
-	for(int i = 0; i < clients.size(); ++i)
-	    cpy.push_back(clients[i]);
-	return cpy;
-    }
-};
+}
 
+void ws::websocket::start(int port, std::string wp){
+    webpage = wp;
+    listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    memset(&serv_addr, '0', sizeof(serv_addr));
+    
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_addr.sin_port = htons(port); 
+    
+    bind(listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+    listen(listenfd, port);
+    std::thread thr(&websocket::run, this);
+    thr.detach();
+}
+
+int ws::websocket::send_message(int id, std::string message){
+    bool open = false;
+    for(int i = 0; i < clients.size(); ++i){
+	if(clients[i] == id)
+	    open = true;
+    }
+    if(open){
+	int length = message.size();
+	char* frame = (char*)malloc(sizeof(char)*(length + 2));
+	frame[0] = 0x81;
+	frame[1] = length ^ (length & 0x80 ? 0x80 : 0x00);
+	memcpy(frame + 2, message.c_str(), length);
+	send(id, frame, length + 2, 0);
+	return 1;
+    }else{
+	return -1;
+    }
+}
+
+std::vector<ws::wsmsg> ws::websocket::get_msg_buffer(){
+    std::vector<wsmsg> cpy;
+    std::lock_guard<std::mutex> lock(messages_mx);
+    for(int i = 0; i < messages.size(); ++i)
+	cpy.push_back(messages[i]);
+    return cpy;
+}
+
+std::vector<int> ws::websocket::get_clients(){
+    std::vector<int> cpy;
+    std::lock_guard<std::mutex> lock(clients_mx);
+    for(int i = 0; i < clients.size(); ++i)
+	cpy.push_back(clients[i]);
+    return cpy;
+}
+
+/*
 int main(int argc, char *argv[])
 {
     std::string serverip = "10.20.224.59";
@@ -233,16 +213,17 @@ int main(int argc, char *argv[])
 	"<button onclick=\"sendmessage()\">send</button>\r\n"
 	"<button onclick=\"closews()\">close</button>\r\n";
     
-    websocket ws;
-    ws.init(8080, webpage);
-    sleep(5);
+    ws::websocket ws;
+    ws.start(8080, webpage);
     while(1){
 	std::string input = "";
-	std::cout << "1: check message buffer\n2: send message\n3: list client ids" << std::endl;
+	std::cout << "\n1: check message buffer\n2: send message\n3: list client ids" << std::endl;
 	getline(std::cin, input);
 	int option = stoi(input);
 	if(option == 1){
-	    std::cout << ws.get_msg_buffer() << std::endl;
+	    std::vector<ws::wsmsg> messages = ws.get_msg_buffer();
+	    for(int i = 0; i < messages.size(); ++i)
+		std::cout << "client" << messages[i].sock_id <<  ": " << messages[i].message << std::endl;
 	}
 	if(option == 2){
 	    std::cout << "sent msg to socket number: ";
@@ -261,8 +242,10 @@ int main(int argc, char *argv[])
 	}
 	if(option == 3){
 	    std::vector<int> clients = ws.get_clients();
+	    std::cout << "active clients:" << std::endl;
 	    for(int i = 0; i < clients.size(); ++i)
 		std::cout << clients[i] << std::endl;
 	}
     };
 }
+*/
