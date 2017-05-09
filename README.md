@@ -18,8 +18,8 @@ g++ example.cpp websocket.cpp include/base64.cpp -lcrypto -pthread<br>
 Confirmed to run well on Manjaro Linux<br>
 For some reason it takes a while to connect a client to the server, but it works.<br>
 
-Base64 source:
-http://renenyffenegger.ch/notes/development/Base64/Encoding-and-decoding-base-64-with-cpp
+Base64 source:<br>
+http://renenyffenegger.ch/notes/development/Base64/Encoding-and-decoding-base-64-with-cpp<br>
 **Sources of information:**<br>
 https://developer.mozilla.org/en-US/docs/Web/API/WebSocket<br>
 Incredibly well written source for websocket implementation<br>
